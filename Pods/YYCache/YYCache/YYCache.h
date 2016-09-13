@@ -32,10 +32,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 /**
  `YYCache` is a thread safe key-value cache.
+ 'YYCache' 是一个线程安全的缓存器
  
  It use `YYMemoryCache` to store objects in a small and fast memory cache,
  and use `YYDiskCache` to persisting objects to a large and slow disk cache.
  See `YYMemoryCache` and `YYDiskCache` for more information.
+ 内存缓存
+ 硬盘缓存
  */
 @interface YYCache : NSObject
 

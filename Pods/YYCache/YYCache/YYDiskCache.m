@@ -22,6 +22,8 @@
 static const int extended_data_key;
 
 /// Free disk space in bytes.
+
+// 获取空闲的硬盘容量
 static int64_t _YYDiskSpaceFree() {
     NSError *error = nil;
     NSDictionary *attrs = [[NSFileManager defaultManager] attributesOfFileSystemForPath:NSHomeDirectory() error:&error];
@@ -32,6 +34,7 @@ static int64_t _YYDiskSpaceFree() {
 }
 
 /// String's md5 hash.
+// 生成MD5值
 static NSString *_YYNSStringMD5(NSString *string) {
     if (!string) return nil;
     NSData *data = [string dataUsingEncoding:NSUTF8StringEncoding];
@@ -50,6 +53,7 @@ static NSString *_YYNSStringMD5(NSString *string) {
 static NSMapTable *_globalInstances;
 static dispatch_semaphore_t _globalInstancesLock;
 
+// 全局变量的初始化，dispatch_once线程安全，只会初始化一次
 static void _YYDiskCacheInitGlobal() {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -58,6 +62,7 @@ static void _YYDiskCacheInitGlobal() {
     });
 }
 
+// 根据key获取cache，缓存在NSMapTable的cache对象
 static YYDiskCache *_YYDiskCacheGetGlobal(NSString *path) {
     if (path.length == 0) return nil;
     _YYDiskCacheInitGlobal();
@@ -67,6 +72,7 @@ static YYDiskCache *_YYDiskCacheGetGlobal(NSString *path) {
     return cache;
 }
 
+// 已cache的path，保存到NSMapTable里
 static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     if (cache.path.length == 0) return;
     _YYDiskCacheInitGlobal();
@@ -78,89 +84,15 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
 
 
 @implementation YYDiskCache {
+    // 存储器
     YYKVStorage *_kv;
+    // 锁
     dispatch_semaphore_t _lock;
+    // 队列
     dispatch_queue_t _queue;
 }
 
-- (void)_trimRecursively {
-    __weak typeof(self) _self = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(_autoTrimInterval * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
-        __strong typeof(_self) self = _self;
-        if (!self) return;
-        [self _trimInBackground];
-        [self _trimRecursively];
-    });
-}
-
-- (void)_trimInBackground {
-    __weak typeof(self) _self = self;
-    dispatch_async(_queue, ^{
-        __strong typeof(_self) self = _self;
-        if (!self) return;
-        Lock();
-        [self _trimToCost:self.costLimit];
-        [self _trimToCount:self.countLimit];
-        [self _trimToAge:self.ageLimit];
-        [self _trimToFreeDiskSpace:self.freeDiskSpaceLimit];
-        Unlock();
-    });
-}
-
-- (void)_trimToCost:(NSUInteger)costLimit {
-    if (costLimit >= INT_MAX) return;
-    [_kv removeItemsToFitSize:(int)costLimit];
-    
-}
-
-- (void)_trimToCount:(NSUInteger)countLimit {
-    if (countLimit >= INT_MAX) return;
-    [_kv removeItemsToFitCount:(int)countLimit];
-}
-
-- (void)_trimToAge:(NSTimeInterval)ageLimit {
-    if (ageLimit <= 0) {
-        [_kv removeAllItems];
-        return;
-    }
-    long timestamp = time(NULL);
-    if (timestamp <= ageLimit) return;
-    long age = timestamp - ageLimit;
-    if (age >= INT_MAX) return;
-    [_kv removeItemsEarlierThanTime:(int)age];
-}
-
-- (void)_trimToFreeDiskSpace:(NSUInteger)targetFreeDiskSpace {
-    if (targetFreeDiskSpace == 0) return;
-    int64_t totalBytes = [_kv getItemsSize];
-    if (totalBytes <= 0) return;
-    int64_t diskFreeBytes = _YYDiskSpaceFree();
-    if (diskFreeBytes < 0) return;
-    int64_t needTrimBytes = targetFreeDiskSpace - diskFreeBytes;
-    if (needTrimBytes <= 0) return;
-    int64_t costLimit = totalBytes - needTrimBytes;
-    if (costLimit < 0) costLimit = 0;
-    [self _trimToCost:(int)costLimit];
-}
-
-- (NSString *)_filenameForKey:(NSString *)key {
-    NSString *filename = nil;
-    if (_customFileNameBlock) filename = _customFileNameBlock(key);
-    if (!filename) filename = _YYNSStringMD5(key);
-    return filename;
-}
-
-- (void)_appWillBeTerminated {
-    Lock();
-    _kv = nil;
-    Unlock();
-}
-
 #pragma mark - public
-
-- (void)dealloc {
-    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillTerminateNotification object:nil];
-}
 
 - (instancetype)init {
     @throw [NSException exceptionWithName:@"YYDiskCache init error" reason:@"YYDiskCache must be initialized with a path. Use 'initWithPath:' or 'initWithPath:inlineThreshold:' instead." userInfo:nil];
@@ -176,24 +108,34 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     self = [super init];
     if (!self) return nil;
     
+    // 先根据path查找cache是否存在
     YYDiskCache *globalCache = _YYDiskCacheGetGlobal(path);
     if (globalCache) return globalCache;
     
+    // 缓存类型
     YYKVStorageType type;
     if (threshold == 0) {
+        // 文件
         type = YYKVStorageTypeFile;
     } else if (threshold == NSUIntegerMax) {
+        // sqlite
         type = YYKVStorageTypeSQLite;
     } else {
+        // 混合
         type = YYKVStorageTypeMixed;
     }
     
     YYKVStorage *kv = [[YYKVStorage alloc] initWithPath:path type:type];
     if (!kv) return nil;
     
+    // 存储器
     _kv = kv;
+    
     _path = path;
+    
+    // 信号量为1的锁
     _lock = dispatch_semaphore_create(1);
+    // 并行队列
     _queue = dispatch_queue_create("com.ibireme.cache.disk", DISPATCH_QUEUE_CONCURRENT);
     _inlineThreshold = threshold;
     _countLimit = NSUIntegerMax;
@@ -202,13 +144,19 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     _freeDiskSpaceLimit = 0;
     _autoTrimInterval = 60;
     
+    // 开启后台线程递归删除，默认60S
     [self _trimRecursively];
+    
+    // 保存到maptable表里
     _YYDiskCacheSetGlobal(self);
     
+    // 注册通知
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(_appWillBeTerminated) name:UIApplicationWillTerminateNotification object:nil];
+    
     return self;
 }
 
+// 是否存在key的对象
 - (BOOL)containsObjectForKey:(NSString *)key {
     if (!key) return NO;
     Lock();
@@ -245,9 +193,11 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
             // nothing to do...
         }
     }
+    // 对象设置的额外数据
     if (object && item.extendedData) {
         [YYDiskCache setExtendedData:item.extendedData toObject:object];
     }
+    
     return object;
 }
 
@@ -264,6 +214,7 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
 - (void)setObject:(id<NSCoding>)object forKey:(NSString *)key {
     if (!key) return;
     if (!object) {
+        // object 为nil，则相当于删除操作
         [self removeObjectForKey:key];
         return;
     }
@@ -427,11 +378,13 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     });
 }
 
+//
 + (NSData *)getExtendedDataFromObject:(id)object {
     if (!object) return nil;
     return (NSData *)objc_getAssociatedObject(object, &extended_data_key);
 }
 
+// 给缓存对象设置扩展的数据
 + (void)setExtendedData:(NSData *)extendedData toObject:(id)object {
     if (!object) return;
     objc_setAssociatedObject(object, &extended_data_key, extendedData, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -453,6 +406,90 @@ static void _YYDiskCacheSetGlobal(YYDiskCache *cache) {
     Lock();
     _kv.errorLogsEnabled = errorLogsEnabled;
     Unlock();
+}
+
+#pragma mark - 删除超过指定指标的对象
+
+// 递归删除
+- (void)_trimRecursively {
+    __weak typeof(self) _self = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(_autoTrimInterval * NSEC_PER_SEC)), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
+        __strong typeof(_self) self = _self;
+        if (!self) return;
+        [self _trimInBackground];
+        [self _trimRecursively];
+    });
+}
+
+// 后台线程根据各项至指标删除不符合要求的对象
+- (void)_trimInBackground {
+    __weak typeof(self) _self = self;
+    dispatch_async(_queue, ^{
+        __strong typeof(_self) self = _self;
+        if (!self) return;
+        Lock();
+        [self _trimToCost:self.costLimit];
+        [self _trimToCount:self.countLimit];
+        [self _trimToAge:self.ageLimit];
+        [self _trimToFreeDiskSpace:self.freeDiskSpaceLimit];
+        Unlock();
+    });
+}
+
+- (void)_trimToCost:(NSUInteger)costLimit {
+    if (costLimit >= INT_MAX) return;
+    [_kv removeItemsToFitSize:(int)costLimit];
+    
+}
+
+- (void)_trimToCount:(NSUInteger)countLimit {
+    if (countLimit >= INT_MAX) return;
+    [_kv removeItemsToFitCount:(int)countLimit];
+}
+
+- (void)_trimToAge:(NSTimeInterval)ageLimit {
+    if (ageLimit <= 0) {
+        [_kv removeAllItems];
+        return;
+    }
+    long timestamp = time(NULL);
+    if (timestamp <= ageLimit) return;
+    long age = timestamp - ageLimit;
+    if (age >= INT_MAX) return;
+    [_kv removeItemsEarlierThanTime:(int)age];
+}
+
+- (void)_trimToFreeDiskSpace:(NSUInteger)targetFreeDiskSpace {
+    if (targetFreeDiskSpace == 0) return;
+    int64_t totalBytes = [_kv getItemsSize];
+    if (totalBytes <= 0) return;
+    int64_t diskFreeBytes = _YYDiskSpaceFree();
+    if (diskFreeBytes < 0) return;
+    int64_t needTrimBytes = targetFreeDiskSpace - diskFreeBytes;
+    if (needTrimBytes <= 0) return;
+    int64_t costLimit = totalBytes - needTrimBytes;
+    if (costLimit < 0) costLimit = 0;
+    [self _trimToCost:(int)costLimit];
+}
+
+// 生成文件名，可以自定义，默认是key的MD5值
+- (NSString *)_filenameForKey:(NSString *)key {
+    NSString *filename = nil;
+    if (_customFileNameBlock) filename = _customFileNameBlock(key);
+    if (!filename) filename = _YYNSStringMD5(key);
+    return filename;
+}
+
+// 释放存储器
+- (void)_appWillBeTerminated {
+    Lock();
+    _kv = nil;
+    Unlock();
+}
+
+- (void)dealloc {
+    // 移除通知
+    [[NSNotificationCenter defaultCenter] removeObserver:self name:UIApplicationWillTerminateNotification object:nil];
 }
 
 @end

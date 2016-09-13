@@ -49,6 +49,7 @@ NS_ASSUME_NONNULL_BEGIN
  objects will be stored in sqlite. 
  
  The default value is 20480 (20KB).
+ *临界值，表示用文件存储还是sqlite存储
  */
 @property (readonly) NSUInteger inlineThreshold;
 
@@ -56,6 +57,7 @@ NS_ASSUME_NONNULL_BEGIN
  If this block is not nil, then the block will be used to archive object instead
  of NSKeyedArchiver. You can use this block to support the objects which do not
  conform to the `NSCoding` protocol.
+ *默认是用NSKeyedArchiver归档，可以自定义，就是这个block
  
  The default value is nil.
  */
@@ -65,7 +67,7 @@ NS_ASSUME_NONNULL_BEGIN
  If this block is not nil, then the block will be used to unarchive object instead
  of NSKeyedUnarchiver. You can use this block to support the objects which do not
  conform to the `NSCoding` protocol.
- 
+ *自定义反序列化
  The default value is nil.
  */
 @property (nullable, copy) id (^customUnarchiveBlock)(NSData *data);
@@ -74,7 +76,7 @@ NS_ASSUME_NONNULL_BEGIN
  When an object needs to be saved as a file, this block will be invoked to generate
  a file name for a specified key. If the block is nil, the cache use md5(key) as 
  default file name.
- 
+ *如果对象要存储为文件，这个block产生名字，默认是key的MD5值
  The default value is nil.
  */
 @property (nullable, copy) NSString *(^customFileNameBlock)(NSString *key);
@@ -92,6 +94,7 @@ NS_ASSUME_NONNULL_BEGIN
  @discussion The default value is NSUIntegerMax, which means no limit.
  This is not a strict limit — if the cache goes over the limit, some objects in the
  cache could be evicted later in background queue.
+ *缓存对象个数限制
  */
 @property NSUInteger countLimit;
 
@@ -101,6 +104,7 @@ NS_ASSUME_NONNULL_BEGIN
  @discussion The default value is NSUIntegerMax, which means no limit.
  This is not a strict limit — if the cache goes over the limit, some objects in the
  cache could be evicted later in background queue.
+ *字节限制
  */
 @property NSUInteger costLimit;
 
@@ -110,6 +114,7 @@ NS_ASSUME_NONNULL_BEGIN
  @discussion The default value is DBL_MAX, which means no limit.
  This is not a strict limit — if an object goes over the limit, the objects could
  be evicted later in background queue.
+ *过期时间
  */
 @property NSTimeInterval ageLimit;
 
@@ -120,6 +125,7 @@ NS_ASSUME_NONNULL_BEGIN
  If the free disk space is lower than this value, the cache will remove objects
  to free some disk space. This is not a strict limit—if the free disk space goes
  over the limit, the objects could be evicted later in background queue.
+ *空闲内存
  */
 @property NSUInteger freeDiskSpaceLimit;
 
@@ -128,11 +134,13 @@ NS_ASSUME_NONNULL_BEGIN
  
  @discussion The cache holds an internal timer to check whether the cache reaches
  its limits, and if the limit is reached, it begins to evict objects.
+ *自动检测缓存是否超超过各个指标限制
  */
 @property NSTimeInterval autoTrimInterval;
 
 /**
  Set `YES` to enable error logs for debug.
+ * 错误日志开关
  */
 @property BOOL errorLogsEnabled;
 
@@ -329,6 +337,8 @@ NS_ASSUME_NONNULL_BEGIN
  Removes objects from the cache use LRU, until the `totalCount` is below the specified value.
  This method may blocks the calling thread until operation finished.
  
+ *如果超过个数，就用LRU算法删除
+ 
  @param count  The total count allowed to remain after the cache has been trimmed.
  */
 - (void)trimToCount:(NSUInteger)count;
@@ -390,6 +400,8 @@ NS_ASSUME_NONNULL_BEGIN
  
  @discussion See 'setExtendedData:toObject:' for more information.
  
+ *获取缓存对象的额外的设置保存的数据
+ 
  @param object An object.
  @return The extended data.
  */
@@ -401,6 +413,8 @@ NS_ASSUME_NONNULL_BEGIN
  @discussion You can set any extended data to an object before you save the object
  to disk cache. The extended data will also be saved with this object. You can get
  the extended data later with "getExtendedDataFromObject:".
+ 
+ *给已经缓存的对象设置额外的数据
  
  @param extendedData The extended data (pass nil to remove).
  @param object       The object.
